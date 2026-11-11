@@ -1,51 +1,79 @@
-# 🚀 Déploiement Automatisé 3CX PWA via Atera RMM
+# Déploiement de la PWA 3CX via Atera RMM
 
-Script PowerShell conçu pour industrialiser et automatiser le déploiement de la Progressive Web App (PWA) **3CX** via Microsoft Edge, piloté par l'outil RMM **Atera** en contexte `SYSTEM`.
+Script PowerShell qui déploie le **client web 3CX** sous forme de **Progressive Web App (PWA)** dans Microsoft Edge, depuis un outil RMM comme **Atera** (contexte `SYSTEM`), et qui s'assure ensuite qu'elle reste ouverte, discrètement, sur les postes.
 
-## 📌 Contexte & Objectifs
+## Pourquoi ce script
 
-Dans le cadre d'un parc informatique en collectivité, ce script permet d'éviter les interventions manuelles poste par poste en garantissant :
-* Une installation propre et silencieuse de la PWA.
-* Une persistance et une disponibilité continue du client de téléphonie pour les agents.
-* La gestion transparente des autorisations matérielles (micro, caméra, notifications).
+Installer la PWA 3CX poste par poste est long, et les utilisateurs la ferment ou l'oublient : les appels entrants sont alors manqués. Ce script automatise l'installation et garantit que l'application est disponible en continu, sans gêner l'utilisateur.
 
----
+## Ce qu'il fait
 
-## ⚙️ Fonctionnalités principales
+**Stratégies Edge (registre `HKLM`)**
+- Installation forcée de la PWA (`WebAppInstallForceList`), ouverte dans une fenêtre dédiée.
+- Edge reste actif en arrière-plan (`BackgroundModeEnabled`) pour que les notifications continuent d'arriver même sans fenêtre ouverte.
+- Notifications, micro et caméra autorisés pour l'adresse du PBX.
 
-1. **Stratégies de Registre Edge (`HKLM`) :**
-   * Force l'installation de l'application web (`WebAppInstallForceList`)[cite: 1].
-   * Active le mode arrière-plan (`BackgroundModeEnabled`) pour s'assurer que les notifications et appels restent actifs même si la fenêtre principale est fermée[cite: 1].
-   * Autorise automatiquement les URLs pour les **notifications**, le **microphone** et la **caméra**[cite: 1].
+**Watchdog (tâche planifiée exécutée dans la session de chaque utilisateur)**
+- Lance la PWA à l'ouverture de session (environ 30 secondes après la connexion), puis vérifie toutes les 60 secondes (réglable) qu'une fenêtre 3CX est ouverte.
+- Si elle est fermée, il la relance en **fenêtre réduite, sans prendre le focus** (API `user32.dll` appelée depuis PowerShell). Edge peut afficher la fenêtre brièvement avant qu'elle soit réduite.
+- Anti-doublon : aucune relance dans les 90 secondes qui suivent un lancement.
+- Supprime les raccourcis de démarrage de PWA 3CX créés par Edge dans les profils, qui feraient double emploi avec le watchdog.
+- Notification Windows à chaque relance disponible en option (`$NotifRelance`), désactivée par défaut.
 
-2. **Watchdog Résilient & Discret (Tâche Planifiée) :**
-   * Vérifie régulièrement (toutes les 60 secondes par défaut) si la fenêtre 3CX est ouverte dans la session de l'utilisateur[cite: 1].
-   * Si l'application est fermée, le watchdog la relance automatiquement en arrière-plan de façon totalement transparente[cite: 1].
-   * **Anti-vol de focus :** Utilise une API C# intégrée (`user32.dll`) pour forcer l'affichage de la fenêtre en mode réduit (`SW_SHOWMINNOACTIVE`) sans perturber l'utilisateur dans sa saisie en cours[cite: 1].
+**Exploitation**
+- Journal de déploiement : `C:\ProgramData\3CX-PWA\deploy.log`.
+- Journal de diagnostic du watchdog, par utilisateur : `%LOCALAPPDATA%\3CX-PWA-watchdog.log` (titres des fenêtres Edge vues, décision prise, lignes de commande des lancements).
+- Désactivation temporaire sur un poste : créer un fichier vide `C:\ProgramData\3CX-PWA\disable`.
+- Mode désinstallation intégré.
 
-3. **Sécurité & Maintenance :**
-   * **Mode Désinstallation :** Permet de nettoyer proprement toutes les clés de registre, tâches planifiées et fichiers associés en modifiant simplement un paramètre dans le script[cite: 1].
-   * **Contournement local :** Possibilité de désactiver temporairement le watchdog sur un poste en créant simplement un fichier vide `disable` dans le répertoire d'installation (`C:\ProgramData\3CX-PWA\disable`)[cite: 1].
-   * **Journalisation (Logs) :** Suivi détaillé des actions et des erreurs dans `C:\ProgramData\3CX-PWA\deploy.log`[cite: 1].
+## Prérequis
 
----
+- Windows 10 ou 11 avec Microsoft Edge (Chromium), Windows PowerShell 5.1.
+- Un outil RMM capable d'exécuter un script PowerShell en `SYSTEM` (testé avec Atera sous Windows 11).
+- L'adresse du client web 3CX de votre PBX.
 
-## 🛠️ Paramètres du Script
+## Paramètres
 
-En haut du fichier `Deploy-3CX-PWA.ps1`, tu peux configurer les variables selon ton client / ton instance :
+À adapter en haut de `Deploy-3CX-PWA.ps1` :
 
-| Paramètre | Description | Valeur par défaut / Exemple |
-| :--- | :--- | :--- |
-| `$PbxUrl` | URL complète du client web 3CX | `"https://your-pbx.on3cx.fr/webclient"`[cite: 1] |
-| `$AppName` | Nom affiché de l'application | `"3CX"`[cite: 1] |
-| `$RepeatSec` | Fréquence de vérification du watchdog (en secondes) | `60`[cite: 1] |
-| `$AppId` | ID unique de la PWA Edge (optionnel) | `"votre_app_id_edge_ici"`[cite: 1] |
-| `$Mode` | Mode d'exécution (`Install` ou `Uninstall`) | `"Install"`[cite: 1] |
+| Paramètre | Description | Valeur par défaut |
+|---|---|---|
+| `$PbxUrl` | URL complète du client web 3CX | `https://your-pbx.on3cx.fr/webclient` (à remplacer, le script refuse le placeholder) |
+| `$AppName` | Nom affiché de l'application | `3CX` |
+| `$TitleMatch` | Texte présent dans le titre de la fenêtre PWA (le watchdog s'en sert pour savoir si elle est ouverte) | `3CX` |
+| `$NotifRelance` | `$true` pour afficher une notification à chaque relance | `$false` |
+| `$RepeatSec` | Fréquence de vérification du watchdog, en secondes (minimum 60 : limite du Planificateur de tâches) | `60` |
+| `$AppId` | ID de la PWA installée (voir ci-dessous). Vide = fenêtre `--app=URL` | vide |
+| `$Mode` | `Install` ou `Uninstall` | `Install` |
 
----
+## Utilisation
 
-## 📦 Utilisation via Atera RMM
+1. Importer `Deploy-3CX-PWA.ps1` dans la bibliothèque de scripts du RMM.
+2. Renseigner `$PbxUrl` avec l'adresse du PBX, puis l'exécuter une première fois sur un **poste pilote**, en `SYSTEM`.
+3. Fermer complètement Edge, le rouvrir, puis vérifier dans `edge://policy` (bouton « Recharger les stratégies ») que `WebAppInstallForceList` est bien appliquée.
+4. Ouvrir `edge://web-app-internals`, repérer l'application 3CX et copier son **ID** (32 lettres).
+5. Renseigner `$AppId` avec cet ID et relancer le script : le watchdog ouvre alors la vraie PWA installée, et non une simple fenêtre `--app=URL`. Sans cette étape, une PWA installée par la stratégie et la fenêtre du watchdog peuvent coexister.
+6. Contrôler le résultat : fermer la fenêtre 3CX, elle doit revenir réduite en une minute environ. Puis déployer sur le reste du parc.
 
-1. Télécharge ou importe le script `Deploy-3CX-PWA.ps1` dans la bibliothèque de scripts d'**Atera**.
-2. Adapte l'URL de ton PBX (`$PbxUrl`) dans les paramètres.
-3. Exécute le script sur les postes cibles en contexte **SYSTEM**.
+L'ID de la PWA dépend du site : il est identique sur tous les postes d'un même PBX, mais différent d'un PBX à l'autre. Il faut donc une valeur de `$PbxUrl` et de `$AppId` par client.
+
+Le script peut être relancé sans risque sur un poste déjà configuré : les valeurs de registre sont réécrites, la tâche planifiée est recréée et les fichiers du watchdog sont remplacés.
+
+## Désinstallation
+
+Passer `$Mode` à `"Uninstall"` et exécuter le script. Il supprime la tâche planifiée, les stratégies d'installation et d'autorisation, et les fichiers du watchdog. `BackgroundModeEnabled` et le dossier de logs sont laissés en place.
+
+## Limites connues
+
+- Une **confirmation avant fermeture** de l'application ne peut pas être imposée par une stratégie Edge : c'est un comportement du site.
+- Edge peut ralentir une fenêtre réduite. Les appels et notifications fonctionnent, mais un test d'appel entrant sur le poste pilote reste recommandé.
+- Le watchdog repère la fenêtre par son titre : si le titre ne contient pas `$TitleMatch`, il relancera l'application en boucle. Le journal de diagnostic montre les titres réellement vus.
+- Le script modifie des stratégies Edge en machine : Edge affiche alors « Géré par votre organisation ».
+
+## Avertissement
+
+Script fourni tel quel, sans garantie. Il modifie le registre et crée une tâche planifiée : le tester sur un poste pilote avant tout déploiement à grande échelle.
+
+## Licence
+
+[MIT](LICENSE)
