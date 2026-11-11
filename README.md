@@ -24,7 +24,7 @@ Installer la PWA 3CX poste par poste est long, et les utilisateurs la ferment ou
 - Journal de déploiement : `C:\ProgramData\3CX-PWA\deploy.log`.
 - Journal de diagnostic du watchdog, par utilisateur : `%LOCALAPPDATA%\3CX-PWA-watchdog.log` (titres des fenêtres Edge vues, décision prise, lignes de commande des lancements).
 - Désactivation temporaire sur un poste : créer un fichier vide `C:\ProgramData\3CX-PWA\disable`.
-- Mode désinstallation intégré.
+- Désinstallation : mode `Uninstall` intégré au script, et script dédié `Uninstall-3CX-PWA.ps1` pour un retrait complet (voir plus bas).
 
 ## Prérequis
 
@@ -61,7 +61,59 @@ Le script peut être relancé sans risque sur un poste déjà configuré : les v
 
 ## Désinstallation
 
-Passer `$Mode` à `"Uninstall"` et exécuter le script. Il supprime la tâche planifiée, les stratégies d'installation et d'autorisation, et les fichiers du watchdog. `BackgroundModeEnabled` et le dossier de logs sont laissés en place.
+Deux possibilités, selon le niveau de nettoyage voulu.
+
+### Option 1 : mode `Uninstall` du script de déploiement
+
+Passer `$Mode` à `"Uninstall"` dans `Deploy-3CX-PWA.ps1` et l'exécuter. Il supprime la tâche planifiée, les stratégies d'installation et d'autorisation, et les fichiers du watchdog. `BackgroundModeEnabled`, le dossier de logs et la PWA déjà installée dans les profils sont laissés en place.
+
+### Option 2 : script de désinstallation complet `Uninstall-3CX-PWA.ps1`
+
+À utiliser pour retirer **tout** le déploiement, y compris la PWA dans Edge. À exécuter via le RMM en contexte `SYSTEM`.
+
+**Ce qu'il supprime**
+
+| Élément | Détail |
+|---|---|
+| Tâche planifiée | `3CX-PWA-Watchdog` |
+| Stratégies Edge | `WebAppInstallForceList`, `NotificationsAllowedForUrls`, `AudioCaptureAllowedUrls`, `VideoCaptureAllowedUrls` : seules les entrées 3CX sont retirées, les autres applications et URLs sont conservées |
+| `BackgroundModeEnabled` | Supprimé, sauf si `$RetirerModeArrierePlan = $false` |
+| PWA dans Edge | Désinstallée dans la session de chaque utilisateur connecté (voir limites ci-dessous) |
+| Raccourcis | Raccourcis de PWA 3CX du dossier Démarrage, du menu Démarrer et du Bureau, dans tous les profils |
+| Fichiers | `C:\ProgramData\3CX-PWA` et les fichiers `3CX-PWA-*` de chaque profil |
+
+Il ne touche pas à l'application de bureau 3CX, ni aux autres réglages d'Edge.
+
+**Paramètres**
+
+| Paramètre | Description | Valeur par défaut |
+|---|---|---|
+| `$RetirerModeArrierePlan` | Supprime aussi `BackgroundModeEnabled` (à désactiver si ce réglage sert à autre chose sur le poste) | `$true` |
+| `$DesinstallerPWAUtilisateurs` | Lance la désinstallation de la PWA dans la session de chaque utilisateur connecté | `$true` |
+| `$FermerEdge` | Ferme Edge pour tous les utilisateurs à la fin, ce qui force la prise en compte immédiate des changements. Les fenêtres Edge ouvertes sont perdues | `$false` |
+| `$ConserverLogs` | Conserve `C:\ProgramData\3CX-PWA\deploy.log` | `$false` |
+| `$MotCle` | Motif servant à reconnaître les éléments 3CX (adresses, raccourcis, noms d'application) | `3cx` |
+| `$DelaiMaxUtilisateurSec` | Attente maximale par utilisateur pour la désinstallation de sa PWA, en secondes | `180` |
+
+**Utilisation**
+
+1. Importer `Uninstall-3CX-PWA.ps1` dans la bibliothèque de scripts du RMM.
+2. L'exécuter d'abord sur un **poste pilote**, en `SYSTEM`, avec une session utilisateur ouverte.
+3. Consulter le résultat dans la sortie du RMM ou dans `C:\ProgramData\3CX-PWA-uninstall.log`. Le code de sortie vaut `1` si une étape a échoué.
+4. Vérifier dans Edge que `edge://apps` ne liste plus 3CX, puis déployer sur le reste du parc.
+
+Le script continue même si une étape échoue, journalise chaque étape et peut être relancé sans risque sur un poste déjà nettoyé.
+
+**Comment la PWA est retirée d'Edge**
+
+Une PWA appartient au profil de l'utilisateur : un script en `SYSTEM` ne peut pas la désinstaller directement. Pour chaque utilisateur connecté, le script crée donc une tâche temporaire qui s'exécute dans sa session, lance la désinstallation à partir de l'entrée « Applications installées » de la PWA, attend la fin, puis supprime la tâche.
+
+**Limites**
+
+- Utilisateurs **non connectés** au moment de l'exécution : la PWA installée par la stratégie est retirée par Edge lui-même à leur prochaine session, puisque la stratégie n'existe plus. Une PWA installée manuellement par l'utilisateur reste en place : relancer le script quand il est connecté, ou la retirer dans `edge://apps`.
+- La désinstallation peut afficher une **fenêtre de confirmation** à l'utilisateur.
+- Ce mécanisme repose sur l'enregistrement des PWA d'Edge dans les applications installées de Windows, à valider sur un poste pilote : si le journal indique `0 application(s) PWA 3CX traitée(s)` alors que la PWA existe, la retirer manuellement dans `edge://apps`.
+- Avec `$FermerEdge = $true`, tous les processus Edge sont arrêtés : à réserver à une plage de maintenance.
 
 ## Limites connues
 
